@@ -1,0 +1,22 @@
+diff --git a/electrumx/server/session.py b/electrumx/server/session.py
+index 9acde44..7324439 100644
+--- a/electrumx/server/session.py
++++ b/electrumx/server/session.py
+@@ -1395,14 +1395,15 @@ class ElectrumX(SessionBase):
+         else:
+             self.txs_sent += 1
+             client_ver = util.protocol_tuple(self.client)
++            ip_addr = self.remote_address_string()
+             if client_ver != (0, ):
+                 msg = self.coin.warn_old_client_on_tx_broadcast(client_ver)
+                 if msg:
+-                    self.logger.info(f'sent tx: {hex_hash}. and warned user to upgrade their '
++                    self.logger.info(f'sent tx from {ip_addr} : {hex_hash}. and warned user to upgrade their '
+                                      f'client from {self.client}')
+                     return msg
+ 
+-            self.logger.info(f'sent tx: {hex_hash}')
++            self.logger.info(f'sent tx from {ip_addr} : {hex_hash}')
+             return hex_hash
+ 
+     async def transaction_get(self, tx_hash, verbose=False):
