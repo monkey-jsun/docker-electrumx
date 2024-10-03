@@ -1,5 +1,6 @@
 #!/bin/sh
 
+set -x
 set -e
 
 # check & gen ssl certificate
@@ -9,15 +10,30 @@ fi
 
 # check and init tx db
 if [ ! -e "${MARIADB}" ]; then
+
     mariadb-install-db --datadir=${MARIADB}
-    /usr/bin/mariadbd-safe --datadir=${MARIADB} &
-    echo "Mariadb is created.  Please attach to container as root, and modify/run /data/mysql-db-init.sql"
-    echo
-    echo "   docker container exec -it -u root \<container id\> ash"
-    echo "   \<container\> : mariadb -u root < /data/mysql-db-init.sql"
-    echo
+
+    # start mariadbd; for portainer we must use root user. *sigh*
+    /usr/bin/mariadbd-safe --datadir=${MARIADB} --user=root &
+
+    # init the db if init script exits
+    if [ -e /data/mysql-db-init.sql ]; then
+        sleep 5
+        mariadb -u root < /data/mysql-db-init.sql
+    else
+       echo 
+       echo "Mariadb is created.  Please attach to container as root, and modify/run /data/mysql-db-init.sql"
+       echo
+       echo "   docker container exec -it -u root \<container id\> ash"
+       echo "   \<container\> : mariadb -u root < /data/mysql-db-init.sql"
+       echo
+    fi
+
 else
-    /usr/bin/mariadbd-safe --datadir=${MARIADB} &
+
+    # start mariadbd; for portainer we must use root user. *sigh*
+    /usr/bin/mariadbd-safe --datadir=${MARIADB} --user=root &
+
 fi
 
 # get public ip to publicize our service
