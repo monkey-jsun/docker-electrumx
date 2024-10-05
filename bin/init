@@ -15,10 +15,10 @@ if [ ! -e "${MARIADB}" ]; then
 
     # start mariadbd; for portainer we must use root user. *sigh*
     /usr/bin/mariadbd-safe --datadir=${MARIADB} --user=root &
+    sleep 5
 
     # init the db if init script exits
     if [ -e /data/mysql-db-init.sql ]; then
-        sleep 5
         mariadb -u root < /data/mysql-db-init.sql
     else
        echo 
@@ -33,6 +33,7 @@ else
 
     # start mariadbd; for portainer we must use root user. *sigh*
     /usr/bin/mariadbd-safe --datadir=${MARIADB} --user=root &
+    sleep 5
 
 fi
 
@@ -41,5 +42,9 @@ IP=`wget -qO- ifconfig.me`
 export REPORT_SERVICES=ssl://$IP:50002
 echo REPORT_SERVICES : $REPORT_SERVICES
 
+# start sql monitor service
+/usr/local/bin/monitor-sql.sh&
+sleep 2
+
 # run electrumx server
-exec /electrumx/electrumx_server
+/electrumx/electrumx_server 2>&1 | electrumx-tx-parser.py

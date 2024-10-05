@@ -10,9 +10,10 @@ COPY ./patch/* /tmp/
 # leveldb v1.23 disables rtti and cause unfound relocation error
 RUN chmod a+x /usr/local/bin/* && \
     apk add --no-cache git build-base openssl && \
+    apk add --no-cache mysql mysql-client && \
     apk add --allow-untrusted /tmp/leveldb-1.22-r2.apk && \
     apk add --allow-untrusted /tmp/leveldb-dev-1.22-r2.apk && \
-    pip install aiohttp ujson uvloop && \
+    pip install aiohttp ujson uvloop mysql-connector-python && \
     git clone --depth=1 -b $VERSION https://github.com/spesmilo/electrumx.git && \
     cd electrumx && \
     patch -p 1 < /tmp/tx_ip_addr.patch && \
@@ -20,8 +21,7 @@ RUN chmod a+x /usr/local/bin/* && \
     apk del git build-base && \
     rm -rf /tmp/*
 
-RUN apk add --no-cache mysql mysql-client && \
-    mkdir /run/mysqld && \
+RUN mkdir /run/mysqld && \
     chmod a+wx /run/mysqld 
 
 #    git clone --depth=1 -b $VERSION https://github.com/spesmilo/electrumx.git && \
