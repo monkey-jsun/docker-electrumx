@@ -47,4 +47,6 @@ echo REPORT_SERVICES : $REPORT_SERVICES
 sleep 2
 
 # run electrumx server
-/electrumx/electrumx_server 2>&1 | electrumx-tx-parser.py
+/electrumx/electrumx_server 2>&1 \
+    | electrumx-tx-parser.py 2>&1 \
+    | tee -a /data/js-electrumx.log

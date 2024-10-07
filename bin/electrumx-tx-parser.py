@@ -74,6 +74,7 @@ def add_tx_record(tx_id, ip_addr, ip_port):
     obj=get_tx_details(tx_id)
     if not obj:
         print("ex_parser - error transaction : %s" % (tx_id))
+        sys.stdout.flush()
         return
 
     # extract from transacton detail
@@ -97,15 +98,21 @@ def add_tx_record(tx_id, ip_addr, ip_port):
     mydb.commit()
     print("ex_parser - %d record is inserted" % (mycursor.rowcount))
 
+    #flush
+    sys.stdout.flush()
+
 # === the main part ===
 
 mydb = init_db()
 
 sql = "INSERT INTO transaction (received_time, tx_id, size, vsize, vin_count, vout_count, value, ip_addr, port) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)" 
 
-sys.stdout.flush()
+
 for line in sys.stdin:
+    # emulate 'tee' feature
     print(line,end="")
+    sys.stdout.flush()
+
     line=line.strip()
     if not re.search("sent tx from",line):
         continue
