@@ -104,7 +104,7 @@ def get_tx_details(tx_id):
                 time.sleep(TX_LOOKUP_RETRY_WAIT)
     return None
 
-def add_tx_record(tx_id, ip_addr, ip_port):
+def add_tx_record(tx_id, ip_addr, ip_port, received_time):
     # meant to run on a separate thread to avoid blocking main thread
     # we query our own bitcoind, so no need to wait for a third party to
     # notice the tx -- a short pause plus retries is enough
@@ -133,7 +133,7 @@ def add_tx_record(tx_id, ip_addr, ip_port):
     print("ex_parser - size=%d, vsize=%d" % (size, vsize))
 
     # insert into mysql
-    val = (local_time, tx_id, size, vsize, vin_count, vout_count, value, ip_addr, ip_port)
+    val = (received_time, tx_id, size, vsize, vin_count, vout_count, value, ip_addr, ip_port)
     mycursor.execute(sql, val)
     mydb.commit()
     print("ex_parser - %d record is inserted" % (mycursor.rowcount))
@@ -176,8 +176,12 @@ for line in sys.stdin:
         tx_id=tx_id[:-1]
     print("ex-parser - tx_id=%s" % (tx_id))
 
-    # start a thread to deal with adding record
-    x = threading.Thread(target=add_tx_record, args=(tx_id,ip_addr,ip_port))
+    # start a thread to deal with adding record.  local_time is passed by
+    # value: the main loop reassigns it on the next broadcast, which would
+    # otherwise be read by this thread after it wakes and misattribute the
+    # received_time to a later tx.
+    x = threading.Thread(target=add_tx_record,
+                         args=(tx_id,ip_addr,ip_port,local_time))
     x.start()
 
     #flush
