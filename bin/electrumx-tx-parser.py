@@ -37,6 +37,11 @@ TX_LOOKUP_DELAY = 2
 TX_LOOKUP_ATTEMPTS = 3
 TX_LOOKUP_RETRY_WAIT = 5
 
+# one mysql connection shared by every worker thread, so serialise the
+# cursor/commit pairs -- two threads interleaving on one connection corrupts
+# the protocol state
+db_lock = threading.Lock()
+
 # === helpers ===
 def daemon_endpoint():
     # Reuse ElectrumX's own DAEMON_URL rather than a second config knob.
@@ -134,9 +139,13 @@ def add_tx_record(tx_id, ip_addr, ip_port, received_time):
 
     # insert into mysql
     val = (received_time, tx_id, size, vsize, vin_count, vout_count, value, ip_addr, ip_port)
-    mycursor.execute(sql, val)
-    mydb.commit()
-    print("ex_parser - %d record is inserted" % (mycursor.rowcount))
+    with db_lock:
+        mycursor = get_cursor()
+        mycursor.execute(sql, val)
+        mydb.commit()
+        rowcount = mycursor.rowcount
+        mycursor.close()
+    print("ex_parser - %d record is inserted" % (rowcount))
 
     #flush
     sys.stdout.flush()
@@ -156,9 +165,6 @@ for line in sys.stdin:
     line=line.strip()
     if not re.search("sent tx from",line):
         continue
-
-    # re-get cursor because it might be a long while before we get a new input line
-    mycursor = get_cursor()
 
     # we found a tx line!!
     local_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
