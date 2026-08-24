@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 
-import urllib.request
-import urllib.parse
-import base64
-import json
-import pprint
 import re
 import sys
 import time
@@ -12,6 +7,7 @@ import os
 import threading
 from datetime import datetime
 import mysql.connector
+import bitcoind_rpc
 
 # set TEST=1 to do testing with polluting production system
 #   output printed on console instead of log file
@@ -42,39 +38,11 @@ TX_LOOKUP_RETRY_WAIT = 5
 # the protocol state
 db_lock = threading.Lock()
 
+# Resolve DAEMON_URL now rather than on the first broadcast, so a bad or
+# missing one is a loud startup failure instead of a surprise hours later.
+bitcoind_rpc.daemon_endpoint()
+
 # === helpers ===
-def daemon_endpoint():
-    # Reuse ElectrumX's own DAEMON_URL rather than a second config knob.
-    # Accepts 'http://user:pass@host:port/' or bare 'user:pass@host:port',
-    # and takes the first entry if several are listed comma-separated.
-    raw = os.getenv('DAEMON_URL', '').split(',')[0].strip().rstrip('/')
-    if not raw:
-        raise RuntimeError('DAEMON_URL is not set')
-    if '://' not in raw:
-        raw = 'http://' + raw
-    parts = urllib.parse.urlsplit(raw)
-    if not parts.username:
-        raise RuntimeError('DAEMON_URL carries no credentials')
-    userpass = '%s:%s' % (parts.username, parts.password or '')
-    auth = base64.b64encode(userpass.encode()).decode()
-    url = '%s://%s:%d/' % (parts.scheme, parts.hostname, parts.port or 8332)
-    return url, 'Basic ' + auth
-
-DAEMON_URL_, DAEMON_AUTH_ = daemon_endpoint()
-
-def bitcoind_rpc(method, params):
-    payload = json.dumps({'jsonrpc': '1.0', 'id': 'ex-parser',
-                          'method': method, 'params': params}).encode()
-    req = urllib.request.Request(
-        DAEMON_URL_, data=payload,
-        headers={'Content-Type': 'application/json',
-                 'Authorization': DAEMON_AUTH_})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        obj = json.load(resp)
-    if obj.get('error'):
-        raise RuntimeError(obj['error'])
-    return obj['result']
-
 def init_db():
     # connect to mysql db
     return mysql.connector.connect(
@@ -100,7 +68,7 @@ def get_tx_details(tx_id):
     # the verbose form returns the same shape we used to get from blockchair.
     for attempt in range(TX_LOOKUP_ATTEMPTS):
         try:
-            return bitcoind_rpc('getrawtransaction', [tx_id, True])
+            return bitcoind_rpc.call('getrawtransaction', [tx_id, True])
         except Exception as e:
             print("ex-parser - getrawtransaction failed (%d/%d) for %s : %s"
                   % (attempt + 1, TX_LOOKUP_ATTEMPTS, tx_id, e))
