@@ -43,6 +43,45 @@ IP=`curl ifconfig.me`
 export REPORT_SERVICES=ssl://$IP:50002
 echo REPORT_SERVICES : $REPORT_SERVICES
 
+# ElectrumX packs its history flush counter into a uint16, so at 65,536 it
+# starts dying on every flush with
+#   struct.error: 'H' format requires 0 <= number <= 65535
+# Only electrumx_compact_history resets the counter, and it needs the server
+# stopped -- which is exactly where we are right now.  So check the counter on
+# every start and compact before the overflow instead of after it.
+#
+# We do not wait for a scheduled reboot to get here: electrumx-tx-parser.py
+# watches electrumx's own "flush #N" logging and stops the server once N passes
+# this same threshold, so the restart that lands us here happens exactly when a
+# compaction is due.  One number drives both, so a restart always arrives at a
+# boot that compacts.
+#
+# 60,000 leaves ~5,500 flushes of headroom below the 65,535 ceiling, which is
+# ample for a clean shutdown.  Don't lower it to force more frequent
+# compaction: _compact_history walks the whole address keyspace, so every run
+# rewrites the entire history DB no matter what the counter says.
+# Compaction can take a few hours on a full mainnet history; it is resumable.
+COMPACT_AT_FLUSH_COUNT=${COMPACT_AT_FLUSH_COUNT:-60000}
+flush_count=`history-flush-count.py`
+echo "history flush count: $flush_count (compaction threshold: $COMPACT_AT_FLUSH_COUNT)"
+if [ "$flush_count" -ge "$COMPACT_AT_FLUSH_COUNT" ]; then
+    echo "compacting history DB to reset the flush counter ..."
+    /electrumx/electrumx_compact_history
+
+    # electrumx_compact_history catches its own exceptions and still exits 0
+    # (e.g. when COIN is unset, which it requires despite what its docstring
+    # says), so trust the counter rather than the exit status.  Starting the
+    # server with the counter still at the ceiling just crashes it on the
+    # first flush, which is the failure we are here to avoid.
+    flush_count=`history-flush-count.py`
+    echo "history flush count is now $flush_count"
+    if [ "$flush_count" -ge "$COMPACT_AT_FLUSH_COUNT" ]; then
+        echo "ERROR: compaction did not reset the flush counter -- refusing to"
+        echo "       start, since the server would die at its first flush."
+        exit 1
+    fi
+fi
+
 # start sql monitor service
 /usr/local/bin/monitor-sql.sh&
 sleep 2
