@@ -1,0 +1,16 @@
+# The /data volume is runtime state, not source: TLS keys, the mariadb data
+# directory, the electrumx leveldb, logs, sql dumps, and REAL-mysql-db-init.sql
+# with live passwords in it.  Only the sanitised init script and the directory
+# placeholder are tracked.
+/data/*
+!/data/mysql-db-init.sql
+!/data/electrumx-db/
+/data/electrumx-db/*
+!/data/electrumx-db/.placeholder
+
+# Debug credentials belong one directory up, outside the repo entirely (see
+# debug-env.sh.example).  This is a backstop in case they land here instead.
+/debug-env.sh
+
+__pycache__/
+*.pyc

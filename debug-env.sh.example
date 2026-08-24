@@ -1,0 +1,18 @@
+# Template for debug-env.sh, which run-electrumx-alpine.sh sources.
+#
+# Copy this ONE DIRECTORY UP, outside the git repo, and fill in real values:
+#
+#     cp debug-env.sh.example ../debug-env.sh
+#     chmod 600 ../debug-env.sh
+#
+# Keeping it outside the repo rather than relying on .gitignore means a
+# mistaken `git add -f` or a bad ignore rule cannot publish your node's RPC
+# password to a public fork.
+
+# bitcoind JSON-RPC, same form ElectrumX expects.  Used both by ElectrumX
+# itself and by bin/electrumx-tx-parser.py when it looks up broadcast txs.
+export DAEMON_URL="http://rpcuser:rpcpassword@bitcoind-host:8332"
+
+# mariadb users created by data/mysql-db-init.sql
+export EX_WRITER_PASS=CHANGE_ME_FOR_WRITER_PASSWORD
+export EX_READER_PASS=CHANGE_ME_FOR_READER_PASSWORD
