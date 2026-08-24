@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import re
+import subprocess
 import sys
 import time
 import os
@@ -37,6 +38,80 @@ TX_LOOKUP_RETRY_WAIT = 5
 # cursor/commit pairs -- two threads interleaving on one connection corrupts
 # the protocol state
 db_lock = threading.Lock()
+
+# ElectrumX packs its history flush counter into a uint16 and dies on every
+# flush once it passes 65,535.  Only electrumx_compact_history resets it, and
+# that needs the server stopped -- so when the counter reaches the threshold we
+# stop it ourselves, cleanly.  bin/init compacts on the way back up and the
+# container returns under docker's restart policy (portainer: "always unless
+# stopped").
+#
+# db.py logs the counter on every flush and we already read every line it
+# writes, so we trigger on the real condition rather than on a timer: this
+# fires only when a compaction is actually due, roughly once every two years.
+#
+# This is the same COMPACT_AT_FLUSH_COUNT that bin/init gates compaction on --
+# deliberately one number, so a restart always lands on a boot that compacts.
+# Env-tunable so a dev box can rehearse the whole cycle with a small value.
+# Set it to 0 to disable the restart.
+COMPACT_AT_FLUSH_COUNT = int(os.getenv('COMPACT_AT_FLUSH_COUNT', '60000'))
+
+# A clean shutdown can take a while -- it finishes the flush in progress and
+# closes several large leveldbs.  Wait, but not forever: if SIGTERM has not
+# taken effect by now something is wedged, and hanging here would leave the
+# counter at the ceiling with no restart coming.  A SIGKILL costs us a
+# clear_excess scan on the next start, which is slow but safe and happens
+# before the compaction anyway.
+SHUTDOWN_GRACE = int(os.getenv('SHUTDOWN_GRACE_SECS', '900'))
+
+# matches both "flush #65,535 took ..." and "backup flush #65,535 took ..."
+flush_count_re = re.compile(r'flush #([\d,]+)')
+restart_requested = False
+
+
+def _signal_electrumx(sig):
+    # SIGTERM first: server_base.py turns it into a clean shutdown.  The
+    # pattern cannot match this parser -- our argv says electrumx-tx-parser.py,
+    # not electrumx_server.
+    return subprocess.call(['pkill', sig, '-f', 'electrumx_server'])
+
+
+def _escalate_if_still_running():
+    time.sleep(SHUTDOWN_GRACE)
+    # pkill returns 0 only if it matched something still alive
+    if _signal_electrumx('-0') == 0:
+        print("ex-parser - electrumx still running %ds after SIGTERM; "
+              "sending SIGKILL" % SHUTDOWN_GRACE)
+        sys.stdout.flush()
+        _signal_electrumx('-KILL')
+
+
+def maybe_request_restart(line):
+    '''Stop ElectrumX cleanly once its flush counter reaches the threshold.'''
+    global restart_requested
+    if restart_requested or COMPACT_AT_FLUSH_COUNT <= 0:
+        return
+    m = flush_count_re.search(line)
+    if not m:
+        return
+    count = int(m.group(1).replace(',', ''))
+    if count <= COMPACT_AT_FLUSH_COUNT:
+        return
+
+    restart_requested = True
+    print("ex-parser - history flush count %d passed the threshold %d"
+          % (count, COMPACT_AT_FLUSH_COUNT))
+    print("ex-parser - stopping electrumx so bin/init can compact the history "
+          "DB on the way back up")
+    sys.stdout.flush()
+    try:
+        _signal_electrumx('-TERM')
+        threading.Thread(target=_escalate_if_still_running, daemon=True).start()
+    except Exception as e:
+        # never let this kill the parser: our stdout is electrumx's stdout, so
+        # dying here would break the pipe and take the server down messily
+        print("ex-parser - could not signal electrumx: %s" % e)
+        sys.stdout.flush()
 
 # Resolve DAEMON_URL now rather than on the first broadcast, so a bad or
 # missing one is a loud startup failure instead of a surprise hours later.
@@ -131,6 +206,10 @@ for line in sys.stdin:
     sys.stdout.flush()
 
     line=line.strip()
+
+    # watch electrumx's own flush logging for the uint16 ceiling
+    maybe_request_restart(line)
+
     if not re.search("sent tx from",line):
         continue
 
