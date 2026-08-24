@@ -130,7 +130,19 @@ fi
 /usr/local/bin/monitor-sql.sh&
 sleep 2
 
+# keep one previous log; below the threshold, append instead, so that a couple
+# of short runs cannot push the interesting log out
+LOG_FILE=${LOG_FILE:-/data/js-electrumx.log}
+LOG_MIN_ROTATE_BYTES=${LOG_MIN_ROTATE_BYTES:-10485760}
+if [ -e "$LOG_FILE" ]; then
+    log_size=$(($(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)))
+    if [ "$log_size" -gt "$LOG_MIN_ROTATE_BYTES" ]; then
+        mv -f "$LOG_FILE" "$LOG_FILE.1"
+        echo "rotated previous log ($log_size bytes) to $LOG_FILE.1"
+    fi
+fi
+
 # run electrumx server
 /electrumx/electrumx_server 2>&1 \
     | electrumx-tx-parser.py 2>&1 \
-    | tee -a /data/js-electrumx.log
+    | tee -a "$LOG_FILE"
