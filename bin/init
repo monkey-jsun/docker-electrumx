@@ -142,7 +142,15 @@ if [ -e "$LOG_FILE" ]; then
     fi
 fi
 
-# run electrumx server
+# Backgrounded, not foreground: a shell waiting on a foreground pipeline never
+# runs its traps, so docker stop would kill electrumx mid-flush.
 /electrumx/electrumx_server 2>&1 \
     | electrumx-tx-parser.py 2>&1 \
-    | tee -a "$LOG_FILE"
+    | tee -a "$LOG_FILE" &
+pipeline=$!
+
+trap 'stop-electrumx.sh' TERM INT
+
+set +e
+wait $pipeline
+while kill -0 $pipeline 2>/dev/null; do wait $pipeline; done
