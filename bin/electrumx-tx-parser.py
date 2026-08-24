@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import urllib.request
+import urllib.parse
+import base64
 import json
 import pprint
 import re
@@ -28,7 +30,46 @@ import mysql.connector
 local_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 print("%s - ex-parser starting ... \n" % (local_time))
 
+# how long to wait before asking bitcoind about a freshly broadcast tx,
+# and how hard to retry.  The tx is already in our own mempool by the time
+# the log line is emitted, so this only needs to absorb a brief race.
+TX_LOOKUP_DELAY = 2
+TX_LOOKUP_ATTEMPTS = 3
+TX_LOOKUP_RETRY_WAIT = 5
+
 # === helpers ===
+def daemon_endpoint():
+    # Reuse ElectrumX's own DAEMON_URL rather than a second config knob.
+    # Accepts 'http://user:pass@host:port/' or bare 'user:pass@host:port',
+    # and takes the first entry if several are listed comma-separated.
+    raw = os.getenv('DAEMON_URL', '').split(',')[0].strip().rstrip('/')
+    if not raw:
+        raise RuntimeError('DAEMON_URL is not set')
+    if '://' not in raw:
+        raw = 'http://' + raw
+    parts = urllib.parse.urlsplit(raw)
+    if not parts.username:
+        raise RuntimeError('DAEMON_URL carries no credentials')
+    userpass = '%s:%s' % (parts.username, parts.password or '')
+    auth = base64.b64encode(userpass.encode()).decode()
+    url = '%s://%s:%d/' % (parts.scheme, parts.hostname, parts.port or 8332)
+    return url, 'Basic ' + auth
+
+DAEMON_URL_, DAEMON_AUTH_ = daemon_endpoint()
+
+def bitcoind_rpc(method, params):
+    payload = json.dumps({'jsonrpc': '1.0', 'id': 'ex-parser',
+                          'method': method, 'params': params}).encode()
+    req = urllib.request.Request(
+        DAEMON_URL_, data=payload,
+        headers={'Content-Type': 'application/json',
+                 'Authorization': DAEMON_AUTH_})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        obj = json.load(resp)
+    if obj.get('error'):
+        raise RuntimeError(obj['error'])
+    return obj['result']
+
 def init_db():
     # connect to mysql db
     return mysql.connector.connect(
@@ -49,26 +90,25 @@ def get_cursor():
     return mydb.cursor()
 
 def get_tx_details(tx_id):
-    # print(tx_id)
-    url="https://api.blockchair.com/bitcoin/raw/transaction/" + tx_id
-    data=urllib.request.urlopen(url)
-    obj=json.load(data)
-    
-    # check status and results
-    if obj['context']['code'] != 200:
-        print("ex-parser - URL open failed")
-        return None
-    elif obj['context']['results'] == 0:  
-        print("ex-parser - portal cannot find TX : " + tx_id)
-        return None
-    else:
-        return obj['data'][tx_id]['decoded_raw_transaction']
+    # Ask our own node.  The tx was just broadcast through us so it is in our
+    # mempool; getrawtransaction serves mempool txs even without txindex, and
+    # the verbose form returns the same shape we used to get from blockchair.
+    for attempt in range(TX_LOOKUP_ATTEMPTS):
+        try:
+            return bitcoind_rpc('getrawtransaction', [tx_id, True])
+        except Exception as e:
+            print("ex-parser - getrawtransaction failed (%d/%d) for %s : %s"
+                  % (attempt + 1, TX_LOOKUP_ATTEMPTS, tx_id, e))
+            sys.stdout.flush()
+            if attempt + 1 < TX_LOOKUP_ATTEMPTS:
+                time.sleep(TX_LOOKUP_RETRY_WAIT)
+    return None
 
 def add_tx_record(tx_id, ip_addr, ip_port):
     # meant to run on a separate thread to avoid blocking main thread
-    # it will take a while for the tx to populate to the blockchair website
-    # we wait for 5 minutes which might be extreme, but we avoid retrying
-    time.sleep(60*5)
+    # we query our own bitcoind, so no need to wait for a third party to
+    # notice the tx -- a short pause plus retries is enough
+    time.sleep(TX_LOOKUP_DELAY)
 
     # get transaction details
     obj=get_tx_details(tx_id)
