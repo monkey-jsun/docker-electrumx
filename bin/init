@@ -38,7 +38,8 @@ else
 fi
 
 # get public ip to publicize our service
-IP=`wget -qO- ifconfig.me`
+#IP=`wget -qO- ifconfig.me`
+IP=`curl ifconfig.me`
 export REPORT_SERVICES=ssl://$IP:50002
 echo REPORT_SERVICES : $REPORT_SERVICES
 

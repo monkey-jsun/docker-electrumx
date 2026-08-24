@@ -9,7 +9,7 @@ COPY ./patch/* /tmp/
 
 # leveldb v1.23 disables rtti and cause unfound relocation error
 RUN chmod a+x /usr/local/bin/* && \
-    apk add --no-cache git build-base openssl && \
+    apk add --no-cache git build-base openssl curl && \
     apk add --no-cache mysql mysql-client && \
     apk add --allow-untrusted /tmp/leveldb-1.22-r2.apk && \
     apk add --allow-untrusted /tmp/leveldb-dev-1.22-r2.apk && \
