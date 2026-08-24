@@ -213,6 +213,49 @@ else
     no "13. it signals electrumx_server" "DUMMY-SIGNALLED" "$trig"
 fi
 
+# --------------------------------------------------------------- checks 14-17
+# Database creation from the environment, against a real mariadb on a throwaway
+# datadir.  Runs the block straight out of bin/init rather than a copy.
+echo
+echo "tx database created from EX_*_PASS"
+sed -n '/# Create the tx db from the same/,/^    echo "tx database created/p' \
+    "$here/bin/init" > "$work/dbinit.sh"
+if ! grep -q 'ex_writer' "$work/dbinit.sh"; then
+    no "db-init extraction" "the db creation block from bin/init" "no match -- did bin/init change?"
+else
+    # a password with a quote, a backslash and a space, to exercise sql_quote
+    NASTY="p'a\\ss w0rd"
+    db=$(docker run --rm -v "$work:/work" \
+            -e EX_WRITER_PASS="$NASTY" -e EX_READER_PASS=readerpw \
+            -e EX_ADMIN_PASS=adminpw --entrypoint sh "$IMAGE" -c '
+mariadb-install-db --datadir=/tmp/db >/dev/null 2>&1
+mariadbd-safe --datadir=/tmp/db --user=root >/dev/null 2>&1 &
+for i in $(seq 30); do mariadb -u root -e "select 1" >/dev/null 2>&1 && break; sleep 1; done
+# -x on purpose: the block must turn tracing off itself
+sh -x /work/dbinit.sh 2>&1 | sed "s/^/TRACE:/"
+mariadb -u ex_writer -p"$EX_WRITER_PASS" electrumx_transactions \
+    -e "insert into transaction (received_time,tx_id,size,vsize,vin_count,vout_count,value,ip_addr,port) values (now(),\"ab\",1,1,1,1,0.5,\"1.2.3.4\",1)" \
+    >/dev/null 2>&1 && echo WRITER-OK || echo WRITER-FAILED
+mariadb -u ex_reader -preaderpw electrumx_transactions -e "select count(*) from transaction" >/dev/null 2>&1 \
+    && echo READER-OK || echo READER-FAILED
+mariadb -u ex_reader -preaderpw electrumx_transactions -e "delete from transaction" >/dev/null 2>&1 \
+    && echo READER-CAN-DELETE || echo READER-READONLY
+' 2>&1)
+
+    echo "$db" | grep -q 'WRITER-OK'      && ok "14. ex_writer can insert (password with quote/backslash survived)" \
+                                          || no "14. ex_writer can insert" "WRITER-OK" "$(echo "$db" | grep -v TRACE: | tr '\n' '|')"
+    echo "$db" | grep -q 'READER-OK'      && ok "15. ex_reader can select" \
+                                          || no "15. ex_reader can select" "READER-OK" "$(echo "$db" | grep -v TRACE: | tr '\n' '|')"
+    echo "$db" | grep -q 'READER-READONLY' && ok "16. ex_reader cannot delete" \
+                                          || no "16. ex_reader cannot delete" "READER-READONLY" "$(echo "$db" | grep -v TRACE: | tr '\n' '|')"
+    # the whole point of the set +x: passwords must not reach the log
+    if echo "$db" | grep -q "p'a"; then
+        no "17. passwords stay out of the traced log" "no password in output" "leaked"
+    else
+        ok "17. passwords stay out of the traced log"
+    fi
+fi
+
 echo
 echo "----------------------------------------"
 echo "passed $pass, failed $fail, skipped $skip"

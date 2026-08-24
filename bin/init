@@ -17,17 +17,61 @@ if [ ! -e "${MARIADB}" ]; then
     /usr/bin/mariadbd-safe --datadir=${MARIADB} --user=root &
     sleep 5
 
-    # init the db if init script exits
-    if [ -e /data/mysql-db-init.sql ]; then
-        mariadb -u root < /data/mysql-db-init.sql
-    else
-       echo 
-       echo "Mariadb is created.  Please attach to container as root, and modify/run /data/mysql-db-init.sql"
-       echo
-       echo "   docker container exec -it -u root \<container id\> ash"
-       echo "   \<container\> : mariadb -u root < /data/mysql-db-init.sql"
-       echo
+    # Create the tx db from the same EX_*_PASS the parser and view scripts
+    # connect with, so a password lives in one place.
+    # Tracing off: set -x would echo the passwords into the container log.
+    set +x
+    if [ -z "${EX_WRITER_PASS}" ] || [ -z "${EX_READER_PASS}" ]; then
+        echo "ERROR: EX_WRITER_PASS and EX_READER_PASS must be set to create"
+        echo "       the tx database.  ex_admin is added if EX_ADMIN_PASS is set."
+        exit 1
     fi
+
+    # '' is the sql escape for ', and mariadb also treats \ as an escape
+    sql_quote() {
+        printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e "s/'/''/g"
+    }
+
+    {
+        echo "create database if not exists \`electrumx_transactions\`"
+        echo "  CHARACTER SET utf8 COLLATE utf8_general_ci;"
+
+        # localhost, not '%': we reach mariadb over this container's unix socket
+        printf "create user if not exists 'ex_writer'@'localhost' identified by '%s';\n" \
+            "$(sql_quote "${EX_WRITER_PASS}")"
+        echo "grant SELECT,INSERT,UPDATE,DELETE,LOCK TABLES on electrumx_transactions.* to 'ex_writer'@'localhost';"
+
+        printf "create user if not exists 'ex_reader'@'localhost' identified by '%s';\n" \
+            "$(sql_quote "${EX_READER_PASS}")"
+        echo "grant SELECT on electrumx_transactions.* to 'ex_reader'@'localhost';"
+
+        if [ -n "${EX_ADMIN_PASS:-}" ]; then
+            printf "create user if not exists 'ex_admin'@'localhost' identified by '%s';\n" \
+                "$(sql_quote "${EX_ADMIN_PASS}")"
+            echo "grant SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALTER on electrumx_transactions.* to 'ex_admin'@'localhost';"
+        fi
+
+        cat <<'SCHEMA'
+use `electrumx_transactions`;
+create table if not exists `transaction` (
+	`id` int(11) NOT NULL AUTO_INCREMENT,
+	`received_time` TIMESTAMP not null,
+	`tx_id` char(64) not null,
+	`size` INT not null,
+	`vsize` INT not null,
+	`vin_count` INT not null,
+	`vout_count` INT not null,
+	`value` DECIMAL(16,8) not null,
+	`ip_addr` VARCHAR(31),
+	`port` INT,
+
+	PRIMARY KEY (`id`)
+) ENGINE=INNODB AUTO_INCREMENT=1 ;
+SCHEMA
+    } | mariadb -u root
+    set -x
+
+    echo "tx database created; credentials taken from EX_*_PASS"
 
 else
 
